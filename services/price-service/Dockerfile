@@ -1,5 +1,5 @@
 #build
-FROM python:3.11.15-slim-trixie AS builder
+FROM python:3.14.5-slim-trixie AS builder
 
 WORKDIR /app
 
@@ -7,7 +7,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 #run
-FROM python:3.11.15-slim-trixie AS runner
+FROM python:3.14.5-slim-trixie AS runner
 
 WORKDIR /app
 
