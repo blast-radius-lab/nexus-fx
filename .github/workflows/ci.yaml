@@ -84,7 +84,7 @@ jobs:
 
       # Safely verifies that the Dockerfile builds properly
       - name: Test Build Docker Image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           # Tells Docker where to find the specific microservice folder
           context: ./${{ matrix.service }}
