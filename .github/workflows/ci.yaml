@@ -22,7 +22,7 @@ jobs:
         service: [services/api-gateway, services/engine, services/price-service]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # 1. Check code quality using Ruff static analysis (No installation needed)
       - name: Lint and Format with Ruff
@@ -64,7 +64,7 @@ jobs:
         service: [services/api-gateway, services/engine, services/price-service]
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # 1. SCAN THE FILESYSTEM SOURCE CODE FIRST
       - name: Run Trivy Filesystem Scan
