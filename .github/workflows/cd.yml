@@ -1,0 +1,170 @@
+name: Deploy to AWS (ECS Fargate)
+
+on:
+  workflow_run:
+    workflows: ["Nexus CI"]
+    types: [completed]
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT: nexus-lab
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    
+    name: Deploy to AWS
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr_login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push engine image
+        run: |
+          IMAGE="${{ steps.ecr_login.outputs.registry }}/${{ env.PROJECT }}-engine"
+          docker build \
+            --platform linux/amd64 \
+            -t "${IMAGE}:${{ github.sha }}" \
+            -t "${IMAGE}:latest" \
+            ./services/engine
+          docker push "${IMAGE}:${{ github.sha }}"
+          docker push "${IMAGE}:latest"
+
+      - name: Build and push price image
+        run: |
+          IMAGE="${{ steps.ecr_login.outputs.registry }}/${{ env.PROJECT }}-price"
+          docker build \
+            --platform linux/amd64 \
+            -t "${IMAGE}:${{ github.sha }}" \
+            -t "${IMAGE}:latest" \
+            ./services/price-service
+          docker push "${IMAGE}:${{ github.sha }}"
+          docker push "${IMAGE}:latest"
+
+      - name: Build and push gateway image
+        run: |
+          IMAGE="${{ steps.ecr_login.outputs.registry }}/${{ env.PROJECT }}-gateway"
+          docker build \
+            --platform linux/amd64 \
+            -t "${IMAGE}:${{ github.sha }}" \
+            -t "${IMAGE}:latest" \
+            ./services/api-gateway
+          docker push "${IMAGE}:${{ github.sha }}"
+          docker push "${IMAGE}:latest"
+      
+      - name: Deploy to ECS
+        run: |
+          CLUSTER="${{ env.PROJECT }}"
+          ENGINE_SERVICE="${{ env.PROJECT }}-engine"
+          PRICE_SERVICE="${{ env.PROJECT }}-price"
+          GATEWAY_SERVICE="${{ env.PROJECT }}-gateway"
+
+          # Update task definition with new image tag
+          ENGINE_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "${ENGINE_SERVICE}" \
+            --query 'taskDefinition' \
+            --output json)
+
+          NEW_ENGINE_TASK_DEF=$(echo "${ENGINE_TASK_DEF}" | jq \
+            --arg IMAGE "${{ steps.ecr_login.outputs.registry }}/${{ env.PROJECT }}-engine:${{ github.sha }}" \
+            '
+              .containerDefinitions[0].image = $IMAGE
+              | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+            ')
+
+          ENGINE_NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "${NEW_ENGINE_TASK_DEF}" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          aws ecs update-service \
+            --cluster "${CLUSTER}" \
+            --service "${ENGINE_SERVICE}" \
+            --task-definition "${ENGINE_NEW_ARN}" \
+            --force-new-deployment
+
+          # Update task definition with new image tag
+          PRICE_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "${PRICE_SERVICE}" \
+            --query 'taskDefinition' \
+            --output json)
+
+          NEW_PRICE_TASK_DEF=$(echo "${PRICE_TASK_DEF}" | jq \
+            --arg IMAGE "${{ steps.ecr_login.outputs.registry }}/${{ env.PROJECT }}-price:${{ github.sha }}" \
+            '
+              .containerDefinitions[0].image = $IMAGE
+              | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+            ')
+
+          PRICE_NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "${NEW_PRICE_TASK_DEF}" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          aws ecs update-service \
+            --cluster "${CLUSTER}" \
+            --service "${PRICE_SERVICE}" \
+            --task-definition "${PRICE_NEW_ARN}" \
+            --force-new-deployment
+
+          # Update task definition with new image tag
+          GATEWAY_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "${GATEWAY_SERVICE}" \
+            --query 'taskDefinition' \
+            --output json)
+
+          NEW_GATEWAY_TASK_DEF=$(echo "${GATEWAY_TASK_DEF}" | jq \
+            --arg IMAGE "${{ steps.ecr_login.outputs.registry }}/${{ env.PROJECT }}-gateway:${{ github.sha }}" \
+            '
+              .containerDefinitions[0].image = $IMAGE
+              | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
+            ')
+
+          GATEWAY_NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "${NEW_GATEWAY_TASK_DEF}" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          aws ecs update-service \
+            --cluster "${CLUSTER}" \
+            --service "${GATEWAY_SERVICE}" \
+            --task-definition "${GATEWAY_NEW_ARN}" \
+            --force-new-deployment
+
+          echo "Waiting for deployment to stabilize..."
+          aws ecs wait services-stable \
+            --cluster "${CLUSTER}" \
+            --services "${ENGINE_SERVICE}"
+
+          echo "Waiting for deployment to stabilize..."
+          aws ecs wait services-stable \
+            --cluster "${CLUSTER}" \
+            --services "${PRICE_SERVICE}"
+
+          echo "Waiting for deployment to stabilize..."
+          aws ecs wait services-stable \
+            --cluster "${CLUSTER}" \
+            --services "${GATEWAY_SERVICE}"
+
+      - name: Deployment summary
+        run: |
+          echo "## AWS Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cluster:** ${{ env.PROJECT }}" >> $GITHUB_STEP_SUMMARY

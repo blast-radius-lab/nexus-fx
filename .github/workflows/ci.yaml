@@ -1,0 +1,113 @@
+name: Nexus CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ci.yaml'
+      - 'services/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/ci.yaml'
+      - 'services/**'
+
+jobs:
+  quality-and-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # If service A fails, still finish testing B and C
+      matrix:
+        # Define your microservice directory names here
+        service: [services/api-gateway, services/engine, services/price-service]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 1. Check code quality using Ruff static analysis (No installation needed)
+      - name: Lint and Format with Ruff
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: "check --output-format=github"
+          src: "./${{ matrix.service }}"
+
+      # 2. Setup Python environment for tests
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # Match your project's version
+          cache: "pip"           # Speeds up future runs by caching dependencies
+          cache-dependency-path: "./${{ matrix.service }}/requirements.txt"
+
+
+      # 3. Install your specific app dependencies and pytest
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          if [ -f ./${{ matrix.service }}/requirements.txt ]; then 
+            pip install -r ./${{ matrix.service }}/requirements.txt
+          fi
+      # 4. Run your tests safely now that all imports are available
+      - name: Run tests
+        # We use working-directory so pytest runs as if it's inside folder a, b, or c
+        working-directory: ./${{ matrix.service }}
+        run: pytest tests/
+
+  build-and-scan:
+    name: Verify Docker ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: quality-and-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [services/api-gateway, services/engine, services/price-service]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 1. SCAN THE FILESYSTEM SOURCE CODE FIRST
+      - name: Run Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'              # Scans the local directory filesystem
+          scan-ref: './${{ matrix.service }}' # Pinpoints the specific microservice folder
+          format: 'table'              # Clean, scannable terminal reporting format
+          exit-code: '1'               # 1 means break the pipeline if vulnerabilities are found
+          ignore-unfixed: true         # Skips issues that don't have a patch available yet
+          severity: 'CRITICAL,HIGH'    # Focuses strictly on dangerous exploits
+
+      # 2. BUILD THE IMAGE LOCALLY (Crucial: use load: true)
+      # Set up Docker Buildx for optimized building and caching
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Safely verifies that the Dockerfile builds properly
+      - name: Test Build Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          # Tells Docker where to find the specific microservice folder
+          context: ./${{ matrix.service }}
+          # Explicitly pointing to the local Dockerfile path
+          file: ./${{ matrix.service }}/Dockerfile
+          # Exports the image layers directly into the runner's docker daemon storage
+          load: true 
+          # Keeps the image local to the runner (will not push to a registry)
+          push: false
+          tags: local-test-${{ matrix.service }}:${{ github.sha }}
+          # Leverages GitHub Actions native cache to make future builds blazing fast
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+      
+      # 3. SCAN THE EXPORTED DOCKER IMAGE
+      - name: Run Trivy Image Scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          # Changes target mode from file to container
+          scan-type: 'image'
+          image-ref: 'local-test-${{ matrix.service }}:${{ github.sha }}' # Reads the exact tag from step 2
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: 'CRITICAL,HIGH'
+          trivyignores: '.trivyignore'

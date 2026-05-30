@@ -1,0 +1,26 @@
+groups:
+  - name: latency
+    rules:
+      - alert: latency-p99
+        expr: histogram_quantile(0.99, sum(rate(http_request_duration_highr_seconds_bucket[5m])) by (le,job)) > 0.5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "p99 latency on {{ $labels.job }} exceeded 500ms for 1 minute"
+      - alert: latency-p50
+        expr: histogram_quantile(0.5, sum(rate(http_request_duration_highr_seconds_bucket[5m])) by (le,job)) > 0.2
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p50 latency on {{ $labels.job }} exceeded 200ms for 1 minute"
+  - name: availability
+    rules:
+      - alert: service-availability
+        expr: sum(rate(http_requests_total{status!~"5.."}[5m])) by (job) / sum(rate(http_requests_total[5m])) by (job)  < .9995
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Availability on {{ $labels.job }} breached 99.95%"

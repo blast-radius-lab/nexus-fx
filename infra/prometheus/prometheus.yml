@@ -1,0 +1,35 @@
+# Global configuration settings
+global:
+  scrape_interval: 15s     # How frequently to scrape targets by default (15 seconds is standard)
+  scrape_timeout: 10s      # How long to wait for a target to respond before timing out
+  evaluation_interval: 15s # How frequently to evaluate rules (alerts/recording rules)
+
+# A list of scrape jobs containing targets to pull metrics from
+scrape_configs:
+
+  # --- SERVICE 1: API Gateway ---
+  - job_name: 'api-gateway'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['api-gateway:8000']
+        labels:
+          tier: 'gateway'
+
+  # --- SERVICE 2: Price Service ---
+  - job_name: 'price-service'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['price-service:8001']
+        labels:
+          tier: 'backend'
+
+  # --- SERVICE 3: Engine ---
+  - job_name: 'engine'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['engine:8002']
+        labels:
+          tier: 'backend'
+  
+rule_files:
+  - "./alerts.yml"

@@ -1,0 +1,210 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - db-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nexus}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: on-failure:5 
+
+  price-service:
+    build: ./services/price-service
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: on-failure:5 
+
+  engine:
+    build: ./services/engine
+    ports:
+      - "8002:8002"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus_dev}
+      PRICE_SERVICE_URL: http://price-service:8001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      price-service:
+        condition: service_healthy
+    networks:
+      - db-net
+      - backend-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: on-failure:5 
+
+  api-gateway:
+    build: ./services/api-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-nexus}
+      POSTGRES_USER: ${POSTGRES_USER:-nexus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus_dev}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-prod}
+      JWT_EXPIRY_MINUTES: ${JWT_EXPIRY_MINUTES:-60}
+      PRICE_SERVICE_URL: http://price-service:8001
+      ENGINE_SERVICE_URL: http://engine:8002
+    depends_on:
+      engine:
+        condition: service_healthy
+      price-service:
+        condition: service_healthy
+    networks:
+      - frontend-net
+      - backend-net
+      - db-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    restart: on-failure:5 
+  
+  prometheus:
+    image: prom/prometheus:v2.51.0  
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      # Mounts your local config file into the container
+      - ./infra/prometheus:/etc/prometheus:ro
+      # Optional: Persists your metric data so it isn't wiped when containers restart
+      - promdata:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - backend-net
+      - metrics-net
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafstore:/var/lib/grafana # Persists your custom dashboards and users
+      # Mounts the configurations telling Grafana what to do
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Mounts the actual dashboard JSON files so Grafana can read them
+      - ./infra/grafana/provisioning/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin 
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - metrics-net
+  
+  tempo:
+    image: grafana/tempo:2.4.1
+    container_name: tempo
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./infra/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempodata:/tmp/tempo
+    networks:
+      - backend-net
+      - metrics-net
+
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: loki
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./infra/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - lokidata:/loki
+    networks:
+      - metrics-net
+
+  # --- PROMTAIL ---
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: promtail
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./infra/loki/promtail-config.yaml:/etc/promtail/config.yml:ro
+      # Allows Promtail to talk to Docker daemon and read log structures
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - metrics-net
+
+volumes:
+  pgdata:
+    name: trade_database
+  promdata:
+    name: prometheus-data
+  grafstore:
+    name: grafana-storage
+  tempodata:
+    name: tempo-data
+  lokidata:
+    name: loki-data
+
+networks:
+  frontend-net:
+    driver: bridge
+  db-net:
+    driver: bridge
+  backend-net:
+    driver: bridge
+  metrics-net:
+    driver: bridge

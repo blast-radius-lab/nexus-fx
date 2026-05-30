@@ -1,0 +1,13 @@
+services:
+  price-service:
+    volumes: 
+      - ./services/price-service/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+  engine:
+    volumes: 
+      - ./services/engine/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+  api-gateway:
+    volumes: 
+      - ./services/api-gateway/app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

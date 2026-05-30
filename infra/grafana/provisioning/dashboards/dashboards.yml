@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: 'Default Dashboards'
+    orgId: 1
+    folder: '' # Puts dashboards in the main root folder
+    type: file
+    disableDeletion: true
+    editable: true
+    options:
+      # The path INSIDE the Grafana container where your JSON files live
+      path: /var/lib/grafana/dashboards
