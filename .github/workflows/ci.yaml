@@ -80,7 +80,7 @@ jobs:
       # 2. BUILD THE IMAGE LOCALLY (Crucial: use load: true)
       # Set up Docker Buildx for optimized building and caching
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # Safely verifies that the Dockerfile builds properly
       - name: Test Build Docker Image
