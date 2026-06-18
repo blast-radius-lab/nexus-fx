@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexus FX</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<!-- Login Screen -->
+<div id="login-screen" class="login-container">
+    <div class="login-box">
+        <h1>Nexus FX</h1>
+        <p id="login-subtitle">Sign in to your trading account</p>
+        <div id="login-error" class="error-msg" style="display:none"></div>
+        <form id="login-form">
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" id="login-username" required autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="login-password" required autocomplete="current-password">
+            </div>
+            <div class="form-group" id="email-group" style="display:none">
+                <label>Email</label>
+                <input type="email" id="login-email" autocomplete="email">
+            </div>
+            <button type="submit" class="btn btn-primary" id="login-btn">Sign In</button>
+        </form>
+        <div class="login-toggle">
+            <span id="toggle-text">Don't have an account?</span>
+            <a id="toggle-link" onclick="toggleAuthMode()">Register</a>
+        </div>
+    </div>
+</div>
+
+<!-- Dashboard -->
+<div id="dashboard" class="dashboard">
+    <div class="top-bar">
+        <h1>Nexus FX</h1>
+        <div class="user-info">
+            <div class="connection-status">
+                <div id="ws-status" class="status-dot"></div>
+                <span id="ws-label">Disconnected</span>
+            </div>
+            <span id="username-display"></span>
+            <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
+    </div>
+
+    <div class="account-bar">
+        <div class="account-stat">
+            <div class="label">Balance</div>
+            <div class="value" id="stat-balance">$0.00</div>
+        </div>
+        <div class="account-stat">
+            <div class="label">Open Trades</div>
+            <div class="value" id="stat-trades">0</div>
+        </div>
+        <div class="account-stat">
+            <div class="label">Pending Orders</div>
+            <div class="value" id="stat-pending">0</div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="price-panel">
+            <h2>Live Prices</h2>
+            <div id="price-grid" class="price-grid"></div>
+
+            <div class="tabs">
+                <div class="tab active" data-tab="orders" onclick="switchTab('orders')">Orders</div>
+                <div class="tab" data-tab="trades" onclick="switchTab('trades')">Trades</div>
+                <div class="tab" data-tab="history" onclick="switchTab('history')">History</div>
+            </div>
+
+            <div id="tab-orders">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Instrument</th>
+                            <th>Side</th>
+                            <th>Type</th>
+                            <th>Qty</th>
+                            <th>Limit</th>
+                            <th>Status</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="orders-body"></tbody>
+                </table>
+                <div id="orders-empty" class="empty-state">No pending orders</div>
+            </div>
+
+            <div id="tab-trades" style="display:none">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Instrument</th>
+                            <th>Side</th>
+                            <th>Qty</th>
+                            <th>Fill Price</th>
+                            <th>LP Order</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trades-body"></tbody>
+                </table>
+                <div id="trades-empty" class="empty-state">No open trades</div>
+            </div>
+
+            <div id="tab-history" style="display:none">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Instrument</th>
+                            <th>Side</th>
+                            <th>Type</th>
+                            <th>Qty</th>
+                            <th>Fill Price</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-body"></tbody>
+                </table>
+                <div id="history-empty" class="empty-state">No trade history</div>
+            </div>
+        </div>
+
+        <div class="order-panel">
+            <h2>New Order</h2>
+            <div class="form-group">
+                <label>Instrument</label>
+                <select id="order-instrument"></select>
+            </div>
+            <div class="side-toggle">
+                <button id="side-buy" class="active-buy" onclick="setSide('BUY')">BUY</button>
+                <button id="side-sell" onclick="setSide('SELL')">SELL</button>
+            </div>
+            <div class="form-group">
+                <label>Order Type</label>
+                <select id="order-type" onchange="onOrderTypeChange()">
+                    <option value="MARKET">Market</option>
+                    <option value="LIMIT">Limit</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Quantity (units)</label>
+                <input type="number" id="order-quantity" value="1000" min="1" step="100">
+            </div>
+            <div class="form-group" id="limit-price-group" style="display:none">
+                <label>Limit Price</label>
+                <input type="number" id="order-limit-price" step="0.00001">
+            </div>
+            <div id="order-error" class="error-msg" style="display:none"></div>
+            <button id="submit-order-btn" class="submit-order-btn buy" onclick="submitOrder()">
+                BUY EUR_USD
+            </button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
