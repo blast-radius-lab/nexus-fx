@@ -31,8 +31,6 @@ app.add_typer(auth_app, name="auth")
 
 console = Console()
 
-DEFAULT_SERVER_URL = "https://blastradiuslab.com"
-
 WELCOME_MESSAGE = """\
 ## Welcome to Blast Radius
 
@@ -148,10 +146,35 @@ def _detect_quiz_state(response: str, current_state: dict | None) -> dict | None
         total = int(q_match.group(2))
         answered = asked - 1
         return {"total": total, "asked": asked, "answered": answered}
-    # "Quiz complete" or "N/N" completion
-    if current_state and re.search(r'[Qq]uiz complete', response):
+    # Quiz completion: "Quiz complete", "Quiz score: N/N", "Phase X complete"
+    if current_state and re.search(
+        r'[Qq]uiz (complete|score:\s*\d+/\d+)|[Pp]hase\s+\w+\s+complete', response
+    ):
         return None
     return current_state
+
+
+def _report_quiz_from_state(
+    client, phase: str,
+    prev: dict | None, current: dict | None,
+) -> None:
+    """Report quiz completions by comparing quiz state transitions.
+
+    When the mentor asks "Question N of M", _detect_quiz_state sets
+    answered = N-1.  If answered increased, the questions in between
+    were just graded — report them.  If state went to None (quiz
+    complete), report the final question.
+    """
+    prev_answered = prev.get("answered", 0) if prev else 0
+    if current is None:
+        if prev is None:
+            return
+        # Quiz just completed — report from prev_answered+1 to total
+        for q in range(prev_answered + 1, prev.get("total", 0) + 1):
+            client.report_progress(phase, "quiz", str(q))
+    elif current.get("answered", 0) > prev_answered:
+        for q in range(prev_answered + 1, current["answered"] + 1):
+            client.report_progress(phase, "quiz", str(q))
 
 
 def _parse_file_requests(response: str) -> list[str]:
@@ -375,19 +398,60 @@ def _build_progress_summary(client: MentorClient, phase: str) -> str:
         return ""
     items = progress.get("items", [])
     if not items:
-        return f"\n[PROGRESS: Phase {PHASE_NAMES.get(phase, phase)}, no completed items yet.]"
+        result = f"\n[PROGRESS: Phase {PHASE_NAMES.get(phase, phase)}, no completed items yet.]"
+    else:
+        by_phase: dict[str, dict[str, list[str]]] = {}
+        for item in items:
+            p = item["phase"]
+            t = item["item_type"]
+            by_phase.setdefault(p, {}).setdefault(t, []).append(item["item_key"])
 
-    by_phase: dict[str, list[str]] = {}
-    for item in items:
-        p = item["phase"]
-        by_phase.setdefault(p, []).append(f"{item['item_type']}:{item['item_key']}")
+        lines = []
+        for p in ["containerization", "ci", "observability", "slo", "chaos", "cd"]:
+            if p not in by_phase:
+                continue
+            parts = []
+            for t in ["task", "quiz", "scenario"]:
+                if t in by_phase[p]:
+                    keys = by_phase[p][t]
+                    label = {"task": "tasks", "quiz": "quiz questions", "scenario": "scenarios"}[t]
+                    parts.append(f"{label} {','.join(sorted(keys))} complete")
+            lines.append(f"  {PHASE_NAMES.get(p, p)}: {'; '.join(parts)}")
 
-    lines = []
-    for p in ["containerization", "ci", "observability", "slo", "chaos", "cd"]:
-        if p in by_phase:
-            lines.append(f"  {PHASE_NAMES.get(p, p)}: {len(by_phase[p])} items complete")
-    summary = "\n".join(lines)
-    return f"\n[PROGRESS: Current phase = {PHASE_NAMES.get(phase, phase)}. Completed:\n{summary}]"
+        current = by_phase.get(phase, {})
+        current_quiz = current.get("quiz", [])
+        current_scenarios = current.get("scenario", [])
+        current_tasks = current.get("task", [])
+        phase_done = False
+        if phase == "chaos":
+            phase_done = len(current_quiz) >= 4 and len(current_scenarios) >= 3
+        elif current_quiz and current_tasks:
+            phase_done = len(current_quiz) >= 4 and len(current_tasks) >= 4
+
+        summary = "\n".join(lines)
+        if phase_done:
+            result = (
+                f"\n[PROGRESS: Current phase = {PHASE_NAMES.get(phase, phase)}. "
+                f"ALL REQUIRED ITEMS COMPLETE — this phase is finished. "
+                f"The learner should advance to the next phase. Completed:\n{summary}]"
+            )
+        else:
+            result = f"\n[PROGRESS: Current phase = {PHASE_NAMES.get(phase, phase)}. Completed:\n{summary}]"
+
+    if phase == "cd":
+        aws = client.get_aws_status()
+        if aws and aws.get("status") == "ready":
+            result += (
+                f"\n[AWS ACCOUNT PROVISIONED: account_id={aws['account_id']}, "
+                f"iam_username={aws['iam_username']}, "
+                f"state_bucket={aws['state_bucket']}, "
+                f"lock_table={aws['lock_table']}. "
+                f"Credentials are on the learner's dashboard.]"
+            )
+        elif aws and aws.get("status") == "provisioning":
+            result += "\n[AWS ACCOUNT STATUS: provisioning in progress.]"
+
+    return result
 
 
 def _sync_session(messages: list[dict], phase: str, quiz_state: dict | None = None) -> None:
@@ -416,7 +480,7 @@ def _render_response(stream: Iterator[str], status: str = "Thinking...") -> str:
 def auth_login(
     server_url: str = typer.Option(
         None, "--server", "-s", envvar="BR_SERVER_URL",
-        help=f"Server URL (default: {DEFAULT_SERVER_URL})",
+        help="Server URL (default: https://blastradiuslab.com)",
     ),
     token: str = typer.Option(
         None, "--token", "-t",
@@ -424,7 +488,7 @@ def auth_login(
     ),
 ):
     """Authenticate with the Blast Radius server."""
-    url = server_url or DEFAULT_SERVER_URL
+    url = server_url or "https://blastradiuslab.com"
     login_flow(url, token)
     console.print("[green]Authenticated successfully.[/green]")
 
@@ -443,7 +507,7 @@ def auth_status():
 def auth_logout():
     """Clear stored credentials and session history."""
     token = get_token()
-    url = get_server_url() or DEFAULT_SERVER_URL
+    url = get_server_url() or "https://blastradiuslab.com"
     if token:
         MentorClient(base_url=url, token=token).clear_remote_session()
     clear_auth()
@@ -467,7 +531,7 @@ def chat(
     ),
 ):
     """Start an interactive chat session with the SRE mentor."""
-    url = server_url or get_server_url() or DEFAULT_SERVER_URL
+    url = server_url or get_server_url() or "https://blastradiuslab.com"
     token = get_token()
     if not token:
         console.print("[yellow]Not authenticated. Let's fix that.[/yellow]")
@@ -497,6 +561,8 @@ def chat(
 
     if static_context:
         console.print(f"[dim]Attached context: {len(static_context)} chars[/dim]")
+
+    tier_gated = False
 
     # Try server session first (portable across machines), fall back to local
     # only if server is unreachable. If server says "no session," that's authoritative.
@@ -532,11 +598,21 @@ def chat(
             )
         else:
             progress_ctx = _build_progress_summary(client, phase)
-            kickoff = (
-                "I'm picking up where I left off. Give me a brief summary of "
-                "where we are and what my next step is."
-                f"{progress_ctx}"
-            )
+            if "ALL REQUIRED ITEMS COMPLETE" in progress_ctx:
+                kickoff = (
+                    f"I've completed all required items in {PHASE_NAMES.get(phase, phase)}. "
+                    f"Give me a brief congratulatory summary of what I accomplished, "
+                    f"then advance me to the next phase. "
+                    f"Do NOT re-quiz me — the quiz is already done. "
+                    f"Emit <<<PHASE_COMPLETE>>> in your response to trigger the transition."
+                    f"{progress_ctx}"
+                )
+            else:
+                kickoff = (
+                    "I'm picking up where I left off. Give me a brief summary of "
+                    "where we are and what my next step is."
+                    f"{progress_ctx}"
+                )
         messages.append({"role": "user", "content": kickoff})
         try:
             file_context = _refresh_file_context(static_context)
@@ -549,6 +625,34 @@ def chat(
             raise SystemExit(1)
         clean_kickoff = _strip_markers(full_response)
         messages.append({"role": "assistant", "content": clean_kickoff})
+
+        # Phase advance from kickoff (e.g., returning after completing a phase)
+        if _has_phase_complete(full_response):
+            old_phase = phase
+            next_phase = advance_phase(phase)
+            if next_phase != old_phase:
+                if client.report_phase(next_phase):
+                    phase = next_phase
+                    console.print(
+                        f"\n[bold green]Phase complete![/bold green] "
+                        f"Advancing: {old_phase} → {phase}\n"
+                    )
+                else:
+                    tier_gated = True
+                    console.print(
+                        f"\n[bold green]Phase {old_phase} complete![/bold green]\n"
+                        f"[yellow]The next phase requires an upgrade. "
+                        f"Visit your dashboard to unlock it.[/yellow]\n"
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "[SYSTEM: Phase advance was blocked — the learner's tier "
+                            "does not include the next phase. They need to upgrade from "
+                            "their dashboard. Do NOT emit <<<PHASE_COMPLETE>>> again. "
+                            "Acknowledge the gate and wait for them to upgrade.]"
+                        ),
+                    })
 
         # Process chaos injection from kickoff response (e.g., resuming mid-phase)
         chaos_scenario = _parse_chaos_injection(full_response)
@@ -575,8 +679,8 @@ def chat(
     else:
         messages = []
         quiz_state = None
-        # Check if user has existing progress on the server (e.g. session lost but
-        # progress intact) — don't reset them to phase A
+        # Check server for phase and progress — resume even on phase A if
+        # items are recorded (e.g. session lost but progress intact).
         server_phase = None
         try:
             import httpx
@@ -585,15 +689,29 @@ def chat(
                 server_phase = me.json().get("phase")
         except Exception:
             pass
-        if server_phase and server_phase != "containerization":
-            phase = server_phase
-            console.print(f"[dim]Session history lost, but your progress is intact at phase: {phase}[/dim]")
-            progress_ctx = _build_progress_summary(client, phase)
-            kickoff = (
-                f"I'm resuming at phase {PHASE_NAMES.get(phase, phase)} but my conversation history was lost. "
-                f"Give me my next task for this phase — don't repeat what I've already done."
-                f"{progress_ctx}"
-            )
+        phase = server_phase or "containerization"
+        progress_ctx = _build_progress_summary(client, phase)
+        has_progress = progress_ctx and "no completed items yet" not in progress_ctx
+
+        if has_progress:
+            console.print(f"[dim]Resuming at phase: {phase}[/dim]")
+            if "ALL REQUIRED ITEMS COMPLETE" in progress_ctx:
+                kickoff = (
+                    f"Starting a new session. My progress data shows I have completed "
+                    f"all required items in {PHASE_NAMES.get(phase, phase)}. "
+                    f"Give me a brief congratulatory summary of what I accomplished "
+                    f"in this phase, then advance me to the next phase. "
+                    f"Do NOT re-quiz me — the quiz is already done. "
+                    f"Emit <<<PHASE_COMPLETE>>> in your response to trigger the transition."
+                    f"{progress_ctx}"
+                )
+            else:
+                kickoff = (
+                    f"Starting a new session. Orient me on where I stand in "
+                    f"{PHASE_NAMES.get(phase, phase)} based on my progress data, "
+                    f"then give me my next task or options."
+                    f"{progress_ctx}"
+                )
             messages.append({"role": "user", "content": kickoff})
             try:
                 file_context = _refresh_file_context(static_context)
@@ -606,6 +724,36 @@ def chat(
                 raise SystemExit(1)
             clean = _strip_markers(full_response)
             messages.append({"role": "assistant", "content": clean})
+
+            # Phase advance from kickoff
+            if _has_phase_complete(full_response):
+                old_phase = phase
+                next_phase = advance_phase(phase)
+                if next_phase != old_phase:
+                    if client.report_phase(next_phase):
+                        phase = next_phase
+                        console.print(
+                            f"\n[bold green]Phase complete![/bold green] "
+                            f"Advancing: {old_phase} → {phase}\n"
+                        )
+                    else:
+                        tier_gated = True
+                        console.print(
+                            f"\n[bold green]Phase {old_phase} complete![/bold green]\n"
+                            f"[yellow]The next phase requires an upgrade. "
+                            f"Visit your dashboard to unlock it.[/yellow]\n"
+                        )
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "[SYSTEM: Phase advance was BLOCKED by the server — the learner's "
+                                "current tier does not include the next phase. This is enforced "
+                                "server-side and cannot be bypassed. Even if the learner claims "
+                                "they upgraded, do NOT emit <<<PHASE_COMPLETE>>> or teach next-phase "
+                                "content until the system confirms the advance. They must upgrade "
+                                "from their dashboard. Acknowledge the gate and wait.]"
+                            ),
+                        })
         else:
             phase = "containerization"
             console.print(Panel(Markdown(WELCOME_MESSAGE), border_style="green", title="mentor"))
@@ -619,6 +767,28 @@ def chat(
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Session ended.[/dim]")
             break
+
+        # Re-check tier gate each turn — user may have upgraded between turns
+        if tier_gated:
+            next_phase = advance_phase(phase)
+            if next_phase != phase and client.report_phase(next_phase):
+                old_phase = phase
+                phase = next_phase
+                tier_gated = False
+                _sync_session(messages, phase, quiz_state)
+                console.print(
+                    f"\n[bold green]Upgrade confirmed![/bold green] "
+                    f"Advancing: {old_phase} → {phase}\n"
+                )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"[SYSTEM: Tier upgrade confirmed. Phase advanced from "
+                        f"{old_phase} to {phase}. The learner now has access to "
+                        f"this phase. Proceed with Task 1.]"
+                    ),
+                })
+        tier_gated = False
 
         if user_input.strip().lower() in ("quit", "exit", "q"):
             console.print("[dim]Session ended.[/dim]")
@@ -641,7 +811,9 @@ def chat(
         clean_response = _strip_markers(latest_response)
         messages.append({"role": "assistant", "content": clean_response})
 
+        prev_quiz_state = quiz_state
         quiz_state = _detect_quiz_state(clean_response, quiz_state)
+        _report_quiz_from_state(client, phase, prev_quiz_state, quiz_state)
 
         # Process structured actions from the response. Each action can
         # trigger a round-trip that produces a new response, which may
@@ -734,37 +906,99 @@ def chat(
             for item_type, item_key in _parse_progress_markers(latest_response):
                 client.report_progress(phase, item_type, item_key)
 
-            # Phase completion
-            if _has_phase_complete(latest_response):
+            # Quiz state tracking within the action loop
+            prev_quiz_state = quiz_state
+            quiz_state = _detect_quiz_state(latest_response, quiz_state)
+            _report_quiz_from_state(client, phase, prev_quiz_state, quiz_state)
+
+            # Phase completion — skip if already tier-gated (avoids repeat messages)
+            if _has_phase_complete(latest_response) and not tier_gated:
                 old_phase = phase
-                phase = advance_phase(phase)
-                _sync_session(messages, phase, quiz_state)
-                if phase != old_phase:
-                    console.print(
-                        f"\n[bold green]Phase complete![/bold green] "
-                        f"Advancing: {old_phase} → {phase}\n"
-                    )
-                    client.report_phase(phase)
-                    acted = True
-                    kickoff = (
-                        f"I'm ready for the next phase. "
-                        f"Give me the first task for {phase}."
-                    )
-                    messages.append({"role": "user", "content": kickoff})
-                    try:
-                        file_context = _refresh_file_context(static_context)
-                        latest_response = _render_response(
-                            client.chat_stream(messages, file_context, phase=phase, quiz_state=quiz_state),
-                            status=f"Starting {phase}...",
-                        )
-                    except Exception as e:
-                        console.print(f"\n[red]Error: {e}[/red]")
-                        messages.pop()
+                next_phase = advance_phase(phase)
+                if next_phase != old_phase:
+                    if client.report_phase(next_phase):
+                        phase = next_phase
                         _sync_session(messages, phase, quiz_state)
-                        break
-                    clean = _strip_markers(latest_response)
-                    messages.append({"role": "assistant", "content": clean})
-                    continue
+                        console.print(
+                            f"\n[bold green]Phase complete![/bold green] "
+                            f"Advancing: {old_phase} → {phase}\n"
+                        )
+                        acted = True
+                    else:
+                        tier_gated = True
+                        _sync_session(messages, phase, quiz_state)
+                        console.print(
+                            f"\n[bold green]Phase {old_phase} complete![/bold green]\n"
+                            f"[yellow]The next phase requires an upgrade. "
+                            f"Visit your dashboard to unlock it.[/yellow]\n"
+                        )
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "[SYSTEM: Phase advance was BLOCKED by the server — the learner's "
+                                "current tier does not include the next phase. This is enforced "
+                                "server-side and cannot be bypassed. Even if the learner claims "
+                                "they upgraded, do NOT emit <<<PHASE_COMPLETE>>> or teach next-phase "
+                                "content until the system confirms the advance. They must upgrade "
+                                "from their dashboard. Acknowledge the gate and wait.]"
+                            ),
+                        })
+                        acted = True
+
+                    if not tier_gated:
+                        # Phase F (cd) transition: show AWS provisioning status
+                        aws_context = ""
+                        if phase == "cd":
+                            aws = client.get_aws_status()
+                            if aws and aws.get("status") == "ready":
+                                console.print(
+                                    f"[bold cyan]AWS Account Ready[/bold cyan]\n"
+                                    f"  Account ID: {aws['account_id']}\n"
+                                    f"  IAM User:   {aws['iam_username']}\n"
+                                    f"  State Bucket: {aws['state_bucket']}\n"
+                                    f"  Lock Table:   {aws['lock_table']}\n"
+                                    f"  Console:    https://{aws['account_id']}.signin.aws.amazon.com/console\n"
+                                    f"  Full details on your dashboard.\n"
+                                )
+                                aws_context = (
+                                    f"\n[AWS ACCOUNT PROVISIONED: account_id={aws['account_id']}, "
+                                    f"iam_username={aws['iam_username']}, "
+                                    f"state_bucket={aws['state_bucket']}, "
+                                    f"lock_table={aws['lock_table']}. "
+                                    f"Credentials are on the learner's dashboard.]"
+                                )
+                            elif aws and aws.get("status") == "provisioning":
+                                console.print(
+                                    "[bold yellow]AWS account is being provisioned...[/bold yellow]\n"
+                                    "Check your dashboard for status.\n"
+                                )
+                                aws_context = "\n[AWS ACCOUNT STATUS: provisioning in progress. Credentials will appear on dashboard when ready.]"
+                            else:
+                                console.print(
+                                    "[dim]AWS account not yet provisioned. Check your dashboard.[/dim]\n"
+                                )
+                                aws_context = "\n[AWS ACCOUNT STATUS: not provisioned yet. The learner should check their dashboard.]"
+
+                        kickoff = (
+                            f"I'm ready for the next phase. "
+                            f"Give me Task 1 for {phase}. Start from the beginning of the fixed task sequence."
+                            f"{aws_context}"
+                        )
+                        messages.append({"role": "user", "content": kickoff})
+                        try:
+                            file_context = _refresh_file_context(static_context)
+                            latest_response = _render_response(
+                                client.chat_stream(messages, file_context, phase=phase, quiz_state=quiz_state),
+                                status=f"Starting {phase}...",
+                            )
+                        except Exception as e:
+                            console.print(f"\n[red]Error: {e}[/red]")
+                            messages.pop()
+                            _sync_session(messages, phase, quiz_state)
+                            break
+                        clean = _strip_markers(latest_response)
+                        messages.append({"role": "assistant", "content": clean})
+                        continue
                 else:
                     console.print(
                         "\n[bold green]All phases complete. "
@@ -789,7 +1023,7 @@ def ask(
     ),
 ):
     """Send a single message to the mentor (non-interactive)."""
-    url = server_url or get_server_url() or DEFAULT_SERVER_URL
+    url = server_url or get_server_url() or "https://blastradiuslab.com"
     token = get_token()
     if not token:
         console.print("[yellow]Not authenticated. Let's fix that.[/yellow]")
@@ -816,7 +1050,7 @@ def usage(
     ),
 ):
     """Show cumulative token usage and estimated cost for this session."""
-    url = server_url or get_server_url() or DEFAULT_SERVER_URL
+    url = server_url or get_server_url() or "https://blastradiuslab.com"
     token = get_token()
     if not token:
         console.print("[yellow]Not authenticated.[/yellow] Run: br-mentor auth login")

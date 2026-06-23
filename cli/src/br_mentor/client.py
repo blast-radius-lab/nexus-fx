@@ -144,17 +144,20 @@ class MentorClient:
             pass
         return None
 
-    def report_phase(self, phase: str) -> None:
-        """Report phase advance to the server for dashboard tracking."""
+    def report_phase(self, phase: str) -> bool:
+        """Report phase advance to the server. Returns False if tier-gated (403)."""
         try:
-            httpx.post(
+            resp = httpx.post(
                 f"{self.base_url}/progress/phase",
                 json={"phase": phase},
                 headers=self._headers(),
                 timeout=5.0,
             )
+            if resp.status_code == 403:
+                return False
+            return True
         except Exception:
-            pass
+            return True
 
     def report_progress(self, phase: str, item_type: str, item_key: str) -> None:
         """Report completion of a curriculum item (task, quiz question, scenario)."""
@@ -210,6 +213,20 @@ class MentorClient:
             )
         except Exception:
             pass
+
+    def get_aws_status(self) -> dict | None:
+        """Fetch AWS provisioning status."""
+        try:
+            resp = httpx.get(
+                f"{self.base_url}/provisioning/status",
+                headers=self._headers(),
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+        return None
 
     def health_check(self) -> bool:
         """Check if the server is reachable."""
