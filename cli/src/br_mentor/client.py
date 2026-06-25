@@ -50,6 +50,15 @@ class MentorClient:
         ) as response:
             if response.status_code == 401:
                 raise PermissionError("Authentication failed. Run: br-mentor auth login")
+            if response.status_code == 403:
+                body = json.loads(response.read().decode())
+                error_type = body.get("error", "")
+                if error_type == "email_not_verified":
+                    raise PermissionError(
+                        "Email not verified. Check your inbox for the verification link, "
+                        "or log in to your dashboard to resend it."
+                    )
+                raise PermissionError(body.get("message", "Access denied."))
             if response.status_code != 200:
                 raise RuntimeError(
                     f"Server returned {response.status_code}: {response.read().decode()}"
