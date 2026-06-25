@@ -5,6 +5,8 @@ from collections.abc import Iterator
 
 import httpx
 
+from br_mentor import CLI_PROTOCOL_VERSION
+
 
 class MentorClient:
     """Client that talks to the Blast Radius server and streams responses."""
@@ -17,6 +19,7 @@ class MentorClient:
         return {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json",
+            "X-BR-CLI-Version": str(CLI_PROTOCOL_VERSION),
         }
 
     def chat_stream(
@@ -48,6 +51,12 @@ class MentorClient:
             headers=self._headers(),
             timeout=httpx.Timeout(connect=10.0, read=600.0, write=10.0, pool=10.0),
         ) as response:
+            if response.status_code == 426:
+                body = json.loads(response.read().decode())
+                raise SystemExit(
+                    f"\n\033[1;33mCLI update required.\033[0m {body.get('message', '')}\n"
+                    f"Run: \033[1mbr-mentor update\033[0m\n"
+                )
             if response.status_code == 401:
                 raise PermissionError("Authentication failed. Run: br-mentor auth login")
             if response.status_code == 403:

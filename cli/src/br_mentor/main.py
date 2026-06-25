@@ -1097,5 +1097,92 @@ def usage(
     console.print(table)
 
 
+@app.command()
+def update(
+    server_url: str = typer.Option(
+        None, "--server", "-s", envvar="BR_SERVER_URL",
+    ),
+):
+    """Update the CLI to the latest version from the server."""
+    import shutil
+    import tempfile
+    import zipfile
+    from pathlib import Path
+
+    import httpx
+
+    from br_mentor import CLI_PROTOCOL_VERSION, __version__
+
+    url = server_url or get_server_url() or "https://blastradiuslab.com"
+
+    console.print(f"[dim]Current CLI: v{__version__} (protocol {CLI_PROTOCOL_VERSION})[/dim]")
+    console.print(f"[dim]Checking {url} for updates...[/dim]")
+
+    try:
+        version_resp = httpx.get(f"{url}/cli/version", timeout=10.0)
+        version_resp.raise_for_status()
+        version_info = version_resp.json()
+    except Exception as e:
+        console.print(f"[red]Failed to check for updates: {e}[/red]")
+        raise SystemExit(1)
+
+    min_version = version_info.get("min_version", 0)
+    if CLI_PROTOCOL_VERSION >= min_version and min_version > 0:
+        console.print("[green]CLI is already up to date.[/green]")
+        return
+
+    if not version_info.get("update_available"):
+        console.print("[yellow]Server does not have a CLI package available.[/yellow]")
+        raise SystemExit(1)
+
+    console.print("[bold]Downloading update...[/bold]")
+    try:
+        pkg_resp = httpx.get(f"{url}/cli/package", timeout=30.0)
+        pkg_resp.raise_for_status()
+    except Exception as e:
+        console.print(f"[red]Failed to download update: {e}[/red]")
+        raise SystemExit(1)
+
+    cli_dir = Path(__file__).resolve().parents[2]
+    if not (cli_dir / "pyproject.toml").exists():
+        console.print(f"[red]Cannot locate CLI directory at {cli_dir}[/red]")
+        raise SystemExit(1)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        zip_path = Path(tmpdir) / "cli-package.zip"
+        zip_path.write_bytes(pkg_resp.content)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            zf.extractall(tmpdir)
+
+        src_dir = Path(tmpdir) / "cli"
+        if not src_dir.exists():
+            console.print("[red]Invalid package structure.[/red]")
+            raise SystemExit(1)
+
+        new_pyproject = src_dir / "pyproject.toml"
+        if new_pyproject.exists():
+            shutil.copy2(new_pyproject, cli_dir / "pyproject.toml")
+
+        new_src = src_dir / "src" / "br_mentor"
+        dest_src = cli_dir / "src" / "br_mentor"
+        if new_src.exists():
+            for py_file in new_src.glob("*.py"):
+                shutil.copy2(py_file, dest_src / py_file.name)
+                console.print(f"  [dim]Updated {py_file.name}[/dim]")
+
+    console.print("[bold]Reinstalling CLI...[/bold]")
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-e", str(cli_dir), "-q"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        console.print(f"[red]pip install failed:[/red]\n{result.stderr}")
+        raise SystemExit(1)
+
+    console.print("[bold green]CLI updated successfully.[/bold green]")
+    console.print("[dim]Restart your session to use the new version.[/dim]")
+
+
 if __name__ == "__main__":
     app()
