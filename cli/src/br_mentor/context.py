@@ -63,6 +63,22 @@ def get_git_status() -> str | None:
         return None
 
 
+def get_changed_files() -> list[str]:
+    """Get list of file paths that have uncommitted changes (staged + unstaged)."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return [p.strip() for p in result.stdout.strip().split('\n') if p.strip()]
+        return []
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+
+
 def gather_context(
     file_paths: list[str],
     include_git_diff: bool = False,

@@ -18,7 +18,7 @@ from rich.live import Live
 
 from br_mentor.auth import clear_auth, get_server_url, get_token, login_flow
 from br_mentor.client import MentorClient
-from br_mentor.context import gather_context, read_file_content, write_file_content, get_git_diff, get_git_status
+from br_mentor.context import gather_context, read_file_content, write_file_content, get_git_diff, get_git_status, get_changed_files
 from br_mentor.session import advance_phase, clear_session, load_session, save_session
 
 app = typer.Typer(
@@ -198,6 +198,19 @@ def _parse_write_requests(response: str) -> list[tuple[str, str]]:
     return writes
 
 
+_REVIEW_INTENT_RE = re.compile(
+    r'(?:let me review|let me (?:look|check|see)|I\'ll review|reviewing)',
+    re.IGNORECASE,
+)
+
+
+def _has_review_intent_without_files(response: str) -> bool:
+    """Detect when the mentor intends to review but forgot the <<<FILES block."""
+    if '<<<FILES' in response:
+        return False
+    return bool(_REVIEW_INTENT_RE.search(response))
+
+
 def _confirm_and_apply_writes(writes: list[tuple[str, str]]) -> list[str]:
     """Show proposed writes, ask for confirmation, apply if approved. Returns list of written paths."""
     from pathlib import Path
@@ -237,8 +250,8 @@ def _confirm_and_apply_writes(writes: list[tuple[str, str]]) -> list[str]:
 
 
 def _has_phase_complete(response: str) -> bool:
-    """Check if mentor signaled phase completion."""
-    return "<<<PHASE_COMPLETE>>>" in response
+    """Check if server signaled phase completion via SSE event."""
+    return "[PHASE_COMPLETE]" in response
 
 
 def _parse_chaos_injection(response: str) -> str | None:
@@ -248,14 +261,10 @@ def _parse_chaos_injection(response: str) -> str | None:
 
 
 def _parse_progress_markers(response: str) -> list[tuple[str, str]]:
-    """Extract progress markers: (item_type, item_key) pairs."""
+    """Extract progress signals from server SSE events."""
     markers = []
-    for match in re.finditer(r'<<<TASK_DONE\s+(\d+)>>>', response):
-        markers.append(("task", match.group(1)))
-    for match in re.finditer(r'<<<QUIZ_DONE\s+(\d+)>>>', response):
-        markers.append(("quiz", match.group(1)))
-    for match in re.finditer(r'<<<SCENARIO_DONE\s+(\d+)>>>', response):
-        markers.append(("scenario", match.group(1)))
+    for match in re.finditer(r'\[PROGRESS (task|quiz|scenario) (\d+)\]', response):
+        markers.append((match.group(1), match.group(2)))
     return markers
 
 
@@ -293,12 +302,14 @@ def _strip_markers(response: str) -> str:
     """Remove all structured markers and hallucinated user responses from display/history text."""
     text = re.sub(r'\n*<<<FILES\n.*?\nFILES>>>\n*', '', response, flags=re.DOTALL)
     text = re.sub(r'\n*<<<WRITE_FILE\s+.+?\n.*?\nWRITE_FILE>>>\n*', '', text, flags=re.DOTALL)
-    text = re.sub(r'\n*<<<PHASE_COMPLETE>>>\n*', '', text)
+    text = re.sub(r'\n*<<<PHASE_COMPLETE[^>]*>>>\n*', '', text)
     text = re.sub(r'\n*<<<CHAOS\s+\w+>>>\n*', '', text)
     text = re.sub(r'\n*<<<CHAOS_STOP\s+\w+>>>\n*', '', text)
-    text = re.sub(r'\n*<<<TASK_DONE\s+\d+>>>\n*', '', text)
-    text = re.sub(r'\n*<<<QUIZ_DONE\s+\d+>>>\n*', '', text)
-    text = re.sub(r'\n*<<<SCENARIO_DONE\s+\d+>>>\n*', '', text)
+    text = re.sub(r'\n*<<<TASK_DONE[^>]*>>>\n*', '', text)
+    text = re.sub(r'\n*<<<QUIZ_DONE[^>]*>>>\n*', '', text)
+    text = re.sub(r'\n*<<<SCENARIO_DONE[^>]*>>>\n*', '', text)
+    text = re.sub(r'\[PROGRESS (?:task|quiz|scenario) \d+\]', '', text)
+    text = re.sub(r'\[PHASE_COMPLETE\]', '', text)
     # Truncate at hallucinated user responses
     text = re.split(r'\n+(?:User|user)\s*:', text, maxsplit=1)[0]
     return text
@@ -846,6 +857,33 @@ def chat(
                 clean = _strip_markers(latest_response)
                 messages.append({"role": "assistant", "content": clean})
                 continue
+
+            # Fallback: mentor said "let me review" but forgot <<<FILES block
+            if _has_review_intent_without_files(latest_response):
+                changed = get_changed_files()
+                if changed:
+                    acted = True
+                    from pathlib import Path
+                    console.print(f"[dim]Auto-attaching {len(changed)} changed file(s):[/dim]")
+                    for p in changed:
+                        console.print(f"[dim]  {Path(p).resolve()}[/dim]")
+                    file_contents = _read_requested_files(changed)
+                    auto_msg = f"[Attached files from project]\n\n{file_contents}"
+                    messages.append({"role": "user", "content": auto_msg})
+                    try:
+                        file_context = _refresh_file_context(static_context)
+                        latest_response = _render_response(
+                            client.chat_stream(messages, file_context, phase=phase, quiz_state=quiz_state),
+                            status="Reviewing...",
+                        )
+                    except Exception as e:
+                        console.print(f"\n[red]Error during review: {e}[/red]")
+                        messages.pop()
+                        _sync_session(messages, phase, quiz_state)
+                        break
+                    clean = _strip_markers(latest_response)
+                    messages.append({"role": "assistant", "content": clean})
+                    continue
 
             # File writes
             proposed_writes = _parse_write_requests(latest_response)
