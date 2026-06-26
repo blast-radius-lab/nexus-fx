@@ -636,6 +636,13 @@ def chat(
                     "where we are and what my next step is."
                     f"{progress_ctx}"
                 )
+        # Include changed files directly so the model can review
+        # without needing a round-trip file request.
+        changed = _get_learner_changed_files()
+        if changed:
+            file_contents = _read_requested_files(changed)
+            kickoff += f"\n\n[Changed files attached for review]\n\n{file_contents}"
+
         messages.append({"role": "user", "content": kickoff})
         try:
             file_context = _refresh_file_context(static_context)
@@ -764,6 +771,13 @@ def chat(
                     f"then give me my next task or options."
                     f"{progress_ctx}"
                 )
+            # Include changed files directly so the model can review
+            # without needing a round-trip file request.
+            changed = _get_learner_changed_files()
+            if changed:
+                file_contents = _read_requested_files(changed)
+                kickoff += f"\n\n[Changed files attached for review]\n\n{file_contents}"
+
             messages.append({"role": "user", "content": kickoff})
             try:
                 file_context = _refresh_file_context(static_context)
