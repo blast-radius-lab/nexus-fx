@@ -178,13 +178,24 @@ def _report_quiz_from_state(
 
 
 def _parse_file_requests(response: str) -> list[str]:
-    """Extract file paths from <<<FILES ... FILES>>> blocks in mentor response."""
+    """Extract file paths from <<<FILES ... FILES>>> blocks in mentor response.
+
+    Handles both proper format (newline-separated, closed with FILES>>>) and
+    common model deviations (space-separated on same line, missing closing tag).
+    """
     paths = []
-    for match in re.finditer(r'<<<FILES\n(.*?)\nFILES>>>', response, re.DOTALL):
-        for line in match.group(1).strip().split('\n'):
-            line = line.strip()
-            if line:
-                paths.append(line)
+    for match in re.finditer(r'<<<FILES[\s\n](.*?)(?:\nFILES>>>|FILES>>>)', response, re.DOTALL):
+        for token in re.split(r'[\s\n]+', match.group(1).strip()):
+            token = token.strip()
+            if token and '.' in token:
+                paths.append(token)
+    if not paths:
+        match = re.search(r'<<<FILES[\s\n](.+?)$', response, re.DOTALL)
+        if match:
+            for token in re.split(r'[\s\n]+', match.group(1).strip()):
+                token = token.strip()
+                if token and '.' in token:
+                    paths.append(token)
     return paths
 
 
@@ -312,7 +323,7 @@ def _stop_chaos(scenario: str) -> bool:
 
 def _strip_markers(response: str) -> str:
     """Remove all structured markers and hallucinated user responses from display/history text."""
-    text = re.sub(r'\n*<<<FILES\n.*?\nFILES>>>\n*', '', response, flags=re.DOTALL)
+    text = re.sub(r'\n*<<<FILES[\s\n].*?(?:FILES>>>|$)\n*', '', response, flags=re.DOTALL)
     text = re.sub(r'\n*<<<WRITE_FILE\s+.+?\n.*?\nWRITE_FILE>>>\n*', '', text, flags=re.DOTALL)
     text = re.sub(r'\n*<<<PHASE_COMPLETE[^>]*>>>\n*', '', text)
     text = re.sub(r'\n*<<<CHAOS\s+\w+>>>\n*', '', text)
