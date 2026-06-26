@@ -174,7 +174,9 @@ class MentorClient:
             if resp.status_code == 403:
                 return False
             return True
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("report_phase failed: %s", e)
             return True
 
     def report_progress(self, phase: str, item_type: str, item_key: str) -> None:
