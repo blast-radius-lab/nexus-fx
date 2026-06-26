@@ -199,10 +199,11 @@ def _parse_write_requests(response: str) -> list[tuple[str, str]]:
 
 
 _REVIEW_INTENT_RE = re.compile(
-    r'(?:let me (?:review|look|check|see|pull up|examine|inspect|take a look)'
-    r'|I\'ll (?:review|check|look|examine|inspect|take a look)'
+    r'(?:let me (?:review|look|check|see|pull up|examine|inspect|read|take a look|grab|open)'
+    r'|I\'ll (?:review|check|look|examine|inspect|read|take a look|grab|open|pull up)'
     r'|looking at (?:your|the) '
-    r'|reviewing (?:your|the) )',
+    r'|reviewing (?:your|the) '
+    r'|let me .{0,20}(?:file|workflow|config|code|yml|yaml|dockerfile))',
     re.IGNORECASE,
 )
 
