@@ -640,6 +640,34 @@ def chat(
         clean_kickoff = _strip_markers(full_response)
         messages.append({"role": "assistant", "content": clean_kickoff})
 
+        # Handle file actions from the resume response
+        _resume_resp = full_response
+        for _ in range(5):
+            req_files = _parse_file_requests(_resume_resp)
+            if not req_files and _has_review_intent_without_files(_resume_resp):
+                req_files = get_changed_files()
+                if req_files:
+                    console.print(f"[dim]Auto-attaching {len(req_files)} changed file(s):[/dim]")
+            if not req_files:
+                break
+            from pathlib import Path as _P
+            for _rp in req_files:
+                console.print(f"[dim]  {_P(_rp).resolve()}[/dim]")
+            _fc = _read_requested_files(req_files)
+            messages.append({"role": "user", "content": f"[Attached files from project]\n\n{_fc}"})
+            try:
+                file_context = _refresh_file_context(static_context)
+                _resume_resp = _render_response(
+                    client.chat_stream(messages, file_context, phase=phase, quiz_state=quiz_state),
+                    status="Reviewing...",
+                )
+            except Exception:
+                messages.pop()
+                break
+            clean = _strip_markers(_resume_resp)
+            messages.append({"role": "assistant", "content": clean})
+        full_response = _resume_resp
+
         # Phase advance from kickoff (e.g., returning after completing a phase)
         if _has_phase_complete(full_response):
             old_phase = phase
