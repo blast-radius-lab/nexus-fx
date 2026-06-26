@@ -214,6 +214,14 @@ def _has_review_intent_without_files(response: str) -> bool:
     return bool(_REVIEW_INTENT_RE.search(response))
 
 
+def _get_learner_changed_files() -> list[str]:
+    """Get changed files that are plausibly learner work (not CLI internals)."""
+    return [
+        f for f in get_changed_files()
+        if not f.startswith("cli/")
+    ]
+
+
 def _confirm_and_apply_writes(writes: list[tuple[str, str]]) -> list[str]:
     """Show proposed writes, ask for confirmation, apply if approved. Returns list of written paths."""
     from pathlib import Path
@@ -645,7 +653,7 @@ def chat(
         for _ in range(5):
             req_files = _parse_file_requests(_resume_resp)
             if not req_files and _has_review_intent_without_files(_resume_resp):
-                req_files = get_changed_files()
+                req_files = _get_learner_changed_files()
                 if req_files:
                     console.print(f"[dim]Auto-attaching {len(req_files)} changed file(s):[/dim]")
             if not req_files:
@@ -661,7 +669,8 @@ def chat(
                     client.chat_stream(messages, file_context, phase=phase, quiz_state=quiz_state),
                     status="Reviewing...",
                 )
-            except Exception:
+            except Exception as e:
+                console.print(f"\n[red]Error during review: {e}[/red]")
                 messages.pop()
                 break
             clean = _strip_markers(_resume_resp)
@@ -773,7 +782,7 @@ def chat(
             for _ in range(5):
                 req_files = _parse_file_requests(_resume_resp)
                 if not req_files and _has_review_intent_without_files(_resume_resp):
-                    req_files = get_changed_files()
+                    req_files = _get_learner_changed_files()
                     if req_files:
                         console.print(f"[dim]Auto-attaching {len(req_files)} changed file(s):[/dim]")
                 if not req_files:
@@ -920,7 +929,7 @@ def chat(
 
             # Fallback: mentor said "let me review" but forgot <<<FILES block
             if _has_review_intent_without_files(latest_response):
-                changed = get_changed_files()
+                changed = _get_learner_changed_files()
                 if changed:
                     acted = True
                     from pathlib import Path
