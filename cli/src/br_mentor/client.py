@@ -68,6 +68,12 @@ class MentorClient:
                         "or log in to your dashboard to resend it."
                     )
                 raise PermissionError(body.get("message", "Access denied."))
+            if response.status_code == 429:
+                body = json.loads(response.read().decode())
+                raise SystemExit(
+                    f"\n\033[1;33mToken budget reached for this phase.\033[0m\n"
+                    f"{body.get('message', 'Try again later.')}\n"
+                )
             if response.status_code != 200:
                 raise RuntimeError(
                     f"Server returned {response.status_code}: {response.read().decode()}"
