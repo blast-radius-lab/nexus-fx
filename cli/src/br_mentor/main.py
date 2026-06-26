@@ -762,7 +762,6 @@ def chat(
         has_progress = progress_ctx and "no completed items yet" not in progress_ctx
 
         if has_progress:
-            console.print(f"[dim]Resuming at phase: {phase}[/dim]")
             if "ALL REQUIRED ITEMS COMPLETE" in progress_ctx:
                 kickoff = (
                     f"Starting a new session. My progress data shows I have completed "
