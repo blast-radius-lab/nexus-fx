@@ -589,20 +589,29 @@ def chat(
 
     # Try server session first (portable across machines), fall back to local
     # only if server is unreachable. If server says "no session," that's authoritative.
-    remote = client.pull_session() if not new else None
-    if remote and remote.get("messages"):
-        previous_messages = remote["messages"]
-        phase = remote["phase"]
-        quiz_state = remote.get("quiz_state")
-        save_session(previous_messages, phase, quiz_state)
-        console.print("[dim]Session restored from server.[/dim]")
-    elif remote is not None:
-        # Server responded but user has no session — fresh start
-        previous_messages, phase, quiz_state = [], "containerization", None
-        clear_session()
+    if new:
+        # --new clears conversation history but preserves phase progress.
+        # Fetch authoritative phase from server progress endpoint.
+        progress_data = client.get_progress()
+        phase = progress_data["phase"] if progress_data else "containerization"
+        previous_messages, quiz_state = [], None
+        console.print(f"[dim]Resuming at phase: {PHASE_NAMES.get(phase, phase)}[/dim]")
     else:
-        # Server unreachable — fall back to local cache
-        previous_messages, phase, quiz_state = load_session()
+        remote = client.pull_session()
+        if remote and remote.get("messages"):
+            previous_messages = remote["messages"]
+            phase = remote["phase"]
+            quiz_state = remote.get("quiz_state")
+            save_session(previous_messages, phase, quiz_state)
+            console.print("[dim]Session restored from server.[/dim]")
+        elif remote is not None:
+            # Server responded but user has no session — fresh start
+            progress_data = client.get_progress()
+            phase = progress_data["phase"] if progress_data else "containerization"
+            previous_messages, quiz_state = [], None
+        else:
+            # Server unreachable — fall back to local cache
+            previous_messages, phase, quiz_state = load_session()
 
     has_real_history = any(m.get("role") == "user" for m in previous_messages)
 
