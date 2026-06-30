@@ -8,6 +8,7 @@ from sqlalchemy import select, update
 
 from .. import _ops
 from ..config import settings
+from ..middleware.metrics import make_downstream_hooks, timed_db_operation
 from ..models.database import ClientOrder, LpOrder, async_session
 from .order_book import OrderBook
 
@@ -26,7 +27,11 @@ class MatchingEngine:
         return self._books[instrument]
 
     async def start(self):
-        self._http = httpx.AsyncClient(base_url=settings.price_service_url, timeout=10.0)
+        self._http = httpx.AsyncClient(
+            base_url=settings.price_service_url,
+            timeout=10.0,
+            event_hooks=make_downstream_hooks("price-service"),
+        )
         self._task = asyncio.create_task(self._check_loop())
         logger.info("Matching engine started")
 
@@ -66,13 +71,14 @@ class MatchingEngine:
         for book in self._books.values():
             book.cancel_order(order_id)
 
-        async with async_session() as session:
-            await session.execute(
-                update(ClientOrder)
-                .where(ClientOrder.id == order_id, ClientOrder.status == "PENDING")
-                .values(status="CANCELLED", updated_at=datetime.now(timezone.utc))
-            )
-            await session.commit()
+        async with timed_db_operation("order_cancel"):
+            async with async_session() as session:
+                await session.execute(
+                    update(ClientOrder)
+                    .where(ClientOrder.id == order_id, ClientOrder.status == "PENDING")
+                    .values(status="CANCELLED", updated_at=datetime.now(timezone.utc))
+                )
+                await session.commit()
         return True
 
     async def _check_loop(self):
@@ -115,56 +121,59 @@ class MatchingEngine:
         self, order_id: UUID, instrument: str, side: str, quantity: float, match_price: float
     ):
         now = datetime.now(timezone.utc)
-        async with async_session() as session:
-            await session.execute(
-                update(ClientOrder)
-                .where(ClientOrder.id == order_id)
-                .values(
-                    status="MATCHED",
-                    matched_price=match_price,
-                    matched_at=now,
-                    updated_at=now,
+
+        async with timed_db_operation("order_match"):
+            async with async_session() as session:
+                await session.execute(
+                    update(ClientOrder)
+                    .where(ClientOrder.id == order_id)
+                    .values(
+                        status="MATCHED",
+                        matched_price=match_price,
+                        matched_at=now,
+                        updated_at=now,
+                    )
                 )
-            )
-            await _ops.apply_latency("db_write_delay")
-            if _ops.should_fail("db_write_fail"):
-                raise Exception("Database write failed")
-            await session.commit()
+                await _ops.apply_latency("db_write_delay")
+                if _ops.should_fail("db_write_fail"):
+                    raise Exception("Database write failed")
+                await session.commit()
 
         lp_result = await self._execute_on_lp(instrument, side, quantity)
 
-        async with async_session() as session:
-            lp_order = LpOrder(
-                client_order_id=order_id,
-                lp_name="simulator",
-                lp_order_id=lp_result.get("order_id", ""),
-                instrument=instrument,
-                side=side,
-                quantity=quantity,
-                submitted_price=match_price,
-                fill_price=lp_result.get("fill_price"),
-                status="FILLED" if lp_result.get("success") else "REJECTED",
-                rejection_reason=lp_result.get("rejection_reason"),
-                filled_at=now if lp_result.get("success") else None,
-            )
-            session.add(lp_order)
-
-            final_status = "FILLED" if lp_result.get("success") else "REJECTED"
-            await session.execute(
-                update(ClientOrder)
-                .where(ClientOrder.id == order_id)
-                .values(
-                    status=final_status,
+        async with timed_db_operation("lp_order_fill"):
+            async with async_session() as session:
+                lp_order = LpOrder(
+                    client_order_id=order_id,
+                    lp_name="simulator",
+                    lp_order_id=lp_result.get("order_id", ""),
+                    instrument=instrument,
+                    side=side,
+                    quantity=quantity,
+                    submitted_price=match_price,
                     fill_price=lp_result.get("fill_price"),
-                    filled_at=now if lp_result.get("success") else None,
+                    status="FILLED" if lp_result.get("success") else "REJECTED",
                     rejection_reason=lp_result.get("rejection_reason"),
-                    updated_at=now,
+                    filled_at=now if lp_result.get("success") else None,
                 )
-            )
-            await _ops.apply_latency("db_write_delay")
-            if _ops.should_fail("db_write_fail"):
-                raise Exception("Database write failed")
-            await session.commit()
+                session.add(lp_order)
+
+                final_status = "FILLED" if lp_result.get("success") else "REJECTED"
+                await session.execute(
+                    update(ClientOrder)
+                    .where(ClientOrder.id == order_id)
+                    .values(
+                        status=final_status,
+                        fill_price=lp_result.get("fill_price"),
+                        filled_at=now if lp_result.get("success") else None,
+                        rejection_reason=lp_result.get("rejection_reason"),
+                        updated_at=now,
+                    )
+                )
+                await _ops.apply_latency("db_write_delay")
+                if _ops.should_fail("db_write_fail"):
+                    raise Exception("Database write failed")
+                await session.commit()
 
         logger.info("Order %s → %s (LP fill_price=%s)", order_id, final_status, lp_result.get("fill_price"))
 
@@ -186,28 +195,30 @@ class MatchingEngine:
             return {"success": False, "rejection_reason": str(e)}
 
     async def _reject_order(self, order_id: UUID, reason: str):
-        async with async_session() as session:
-            await session.execute(
-                update(ClientOrder)
-                .where(ClientOrder.id == order_id)
-                .values(
-                    status="REJECTED",
-                    rejection_reason=reason,
-                    updated_at=datetime.now(timezone.utc),
+        async with timed_db_operation("order_reject"):
+            async with async_session() as session:
+                await session.execute(
+                    update(ClientOrder)
+                    .where(ClientOrder.id == order_id)
+                    .values(
+                        status="REJECTED",
+                        rejection_reason=reason,
+                        updated_at=datetime.now(timezone.utc),
+                    )
                 )
-            )
-            await session.commit()
+                await session.commit()
 
     async def _load_order(self, order_id: UUID) -> dict | None:
-        async with async_session() as session:
-            result = await session.execute(
-                select(ClientOrder).where(ClientOrder.id == order_id)
-            )
-            order = result.scalar_one_or_none()
-            if not order:
-                return None
-            return {
-                "side": order.side,
-                "quantity": float(order.quantity),
-                "instrument": order.instrument,
-            }
+        async with timed_db_operation("order_load"):
+            async with async_session() as session:
+                result = await session.execute(
+                    select(ClientOrder).where(ClientOrder.id == order_id)
+                )
+                order = result.scalar_one_or_none()
+                if not order:
+                    return None
+                return {
+                    "side": order.side,
+                    "quantity": float(order.quantity),
+                    "instrument": order.instrument,
+                }

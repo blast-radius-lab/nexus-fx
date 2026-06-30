@@ -5,13 +5,14 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from . import _ops
 from .config import settings
+from .middleware.metrics import MetricsMiddleware, make_downstream_hooks
 from .middleware.request_logging import RequestLoggingMiddleware
 from .middleware.telemetry import setup_telemetry
 from .routes import account, auth, orders, prices, trades, ws
@@ -26,8 +27,16 @@ STATIC_DIR = Path(__file__).parent.parent / "static"
 async def lifespan(app: FastAPI):
     setup_telemetry("api-gateway")
 
-    price_http = httpx.AsyncClient(base_url=settings.price_service_url, timeout=10.0)
-    engine_http = httpx.AsyncClient(base_url=settings.engine_service_url, timeout=10.0)
+    price_http = httpx.AsyncClient(
+        base_url=settings.price_service_url,
+        timeout=10.0,
+        event_hooks=make_downstream_hooks("price-service"),
+    )
+    engine_http = httpx.AsyncClient(
+        base_url=settings.engine_service_url,
+        timeout=10.0,
+        event_hooks=make_downstream_hooks("engine"),
+    )
 
     prices.init_router(price_http)
     orders.init_router(engine_http)
@@ -54,9 +63,7 @@ class OpsMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(OpsMiddleware)
-
 app.add_middleware(RequestLoggingMiddleware)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -64,6 +71,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(MetricsMiddleware)
 
 app.include_router(auth.router)
 app.include_router(prices.router)
@@ -75,6 +83,11 @@ app.include_router(ops_routes.router)
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics_endpoint():
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/")
