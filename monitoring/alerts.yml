@@ -43,20 +43,20 @@ groups:
 
   - name: slo-latency
     rules:
-      # SLO: 95% of requests under 300ms.
+      # SLO: p99 latency <= 250ms.
       - alert: ApiGatewayLatencyHigh
         expr: |
           histogram_quantile(
-            0.95,
+            0.99,
             sum(rate(http_request_duration_seconds_bucket{job="api-gateway"}[5m])) by (le)
-          ) > 0.3
+          ) > 0.25
         for: 10m
         labels:
           severity: ticket
           service: api-gateway
         annotations:
-          summary: "api-gateway p95 latency above 300ms SLO"
-          description: "p95 = {{ $value | humanizeDuration }} over the last 5m."
+          summary: "api-gateway p99 latency above 250ms SLO"
+          description: "p99 = {{ $value | humanizeDuration }} over the last 5m."
 
   - name: availability
     rules:
