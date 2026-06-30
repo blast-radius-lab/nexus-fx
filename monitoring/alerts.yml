@@ -1,0 +1,70 @@
+groups:
+  - name: slo-availability
+    rules:
+      # SLO: 99.9% availability over 30d. Error budget = 0.1%.
+      # Multi-window, multi-burn-rate alerts (Google SRE workbook).
+      - alert: ApiGatewayErrorBudgetBurnFast
+        expr: |
+          (
+            sum(rate(http_requests_total{job="api-gateway",status=~"5.."}[5m]))
+              / sum(rate(http_requests_total{job="api-gateway"}[5m]))
+          ) > (14.4 * 0.001)
+          and
+          (
+            sum(rate(http_requests_total{job="api-gateway",status=~"5.."}[1h]))
+              / sum(rate(http_requests_total{job="api-gateway"}[1h]))
+          ) > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: page
+          service: api-gateway
+        annotations:
+          summary: "api-gateway burning error budget fast (2% in 1h)"
+          description: "5m and 1h error rate exceed 14.4x burn. Budget exhausted in <2 days."
+
+      - alert: ApiGatewayErrorBudgetBurnSlow
+        expr: |
+          (
+            sum(rate(http_requests_total{job="api-gateway",status=~"5.."}[30m]))
+              / sum(rate(http_requests_total{job="api-gateway"}[30m]))
+          ) > (6 * 0.001)
+          and
+          (
+            sum(rate(http_requests_total{job="api-gateway",status=~"5.."}[6h]))
+              / sum(rate(http_requests_total{job="api-gateway"}[6h]))
+          ) > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: ticket
+          service: api-gateway
+        annotations:
+          summary: "api-gateway burning error budget slow (5% in 6h)"
+          description: "30m and 6h error rate exceed 6x burn."
+
+  - name: slo-latency
+    rules:
+      # SLO: 95% of requests under 300ms.
+      - alert: ApiGatewayLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="api-gateway"}[5m])) by (le)
+          ) > 0.3
+        for: 10m
+        labels:
+          severity: ticket
+          service: api-gateway
+        annotations:
+          summary: "api-gateway p95 latency above 300ms SLO"
+          description: "p95 = {{ $value | humanizeDuration }} over the last 5m."
+
+  - name: availability
+    rules:
+      - alert: ServiceDown
+        expr: up{job=~"api-gateway|engine|price-service"} == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.job }} target down"
+          description: "Prometheus cannot scrape {{ $labels.job }} for 1m."
