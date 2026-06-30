@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import Response
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from .cache.price_cache import PriceCache
@@ -37,6 +38,8 @@ app = FastAPI(title="Nexus Price Service", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(MetricsMiddleware)
+
+FastAPIInstrumentor.instrument_app(app)
 
 app.include_router(prices.router)
 app.include_router(lp.router)

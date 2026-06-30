@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -73,6 +74,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(MetricsMiddleware)
+
+FastAPIInstrumentor.instrument_app(app)
 
 app.include_router(auth.router)
 app.include_router(prices.router)
