@@ -294,6 +294,48 @@ def _parse_progress_markers(response: str) -> list[tuple[str, str]]:
 NEXUS_GATEWAY_URL = os.environ.get("NEXUS_GATEWAY_URL", "http://localhost:8000")
 NEXUS_OPS_TOKEN = os.environ.get("NEXUS_OPS_TOKEN", "br-labs-ops-7f3a2b")
 
+CHAOS_SCENARIO_SEQUENCE = [
+    "price_stopped",
+    "db_write_fail",
+    "price_latency",
+    "memory_pressure",
+]
+
+
+def _next_chaos_scenario(client: "MentorClient") -> str | None:
+    """Return the next chaos scenario to inject, or None if all done."""
+    progress = client.get_progress()
+    done_nums: set[int] = set()
+    if progress:
+        for item in progress.get("items", []):
+            if item["phase"] == "chaos" and item["item_type"] == "scenario":
+                try:
+                    done_nums.add(int(item["item_key"]))
+                except (ValueError, TypeError):
+                    pass
+    for i, name in enumerate(CHAOS_SCENARIO_SEQUENCE, 1):
+        if i not in done_nums:
+            return name
+    return None
+
+
+def _current_chaos_scenario(client: "MentorClient") -> str | None:
+    """Return the scenario that was most recently completed (to stop it)."""
+    progress = client.get_progress()
+    max_done = 0
+    if progress:
+        for item in progress.get("items", []):
+            if item["phase"] == "chaos" and item["item_type"] == "scenario":
+                try:
+                    num = int(item["item_key"])
+                    if num > max_done:
+                        max_done = num
+                except (ValueError, TypeError):
+                    pass
+    if 1 <= max_done <= len(CHAOS_SCENARIO_SEQUENCE):
+        return CHAOS_SCENARIO_SEQUENCE[max_done - 1]
+    return None
+
 
 def _inject_chaos(scenario: str) -> tuple[bool, str]:
     """Silently inject a chaos scenario into the learner's running services."""
@@ -737,14 +779,7 @@ def chat(
         # Process chaos injection from kickoff response (e.g., resuming mid-phase)
         chaos_scenario = _parse_chaos_injection(full_response)
         if not chaos_scenario and phase == "chaos":
-            progress = client.get_progress()
-            scenarios_done = []
-            if progress:
-                for item in progress.get("items", []):
-                    if item["phase"] == "chaos" and item["item_type"] == "scenario":
-                        scenarios_done.append(item["item_key"])
-            if not scenarios_done:
-                chaos_scenario = "price_stopped"
+            chaos_scenario = _next_chaos_scenario(client)
         if chaos_scenario:
             ok, detail = _inject_chaos(chaos_scenario)
             if ok:
@@ -1021,17 +1056,8 @@ def chat(
                     messages.append({"role": "assistant", "content": clean})
                     continue
 
-            # Chaos injection (silent — learner never sees this)
+            # Legacy: still honor model-emitted CHAOS markers if they appear
             chaos_scenario = _parse_chaos_injection(latest_response)
-            if not chaos_scenario and phase == "chaos":
-                progress = client.get_progress()
-                scenarios_done = []
-                if progress:
-                    for item in progress.get("items", []):
-                        if item["phase"] == "chaos" and item["item_type"] == "scenario":
-                            scenarios_done.append(item["item_key"])
-                if not scenarios_done:
-                    chaos_scenario = "price_stopped"
             if chaos_scenario:
                 acted = True
                 ok, detail = _inject_chaos(chaos_scenario)
@@ -1055,9 +1081,7 @@ def chat(
                 messages.append({"role": "assistant", "content": clean})
                 break
 
-            # Chaos stop — just stop the scenario silently, no follow-up API call.
-            # The mentor's debrief question is already in this response; the learner
-            # answers on their next turn.
+            # Legacy: still honor model-emitted CHAOS_STOP if it appears
             chaos_stop = re.search(r'<<<CHAOS_STOP\s+(\w+)>>>', latest_response)
             if chaos_stop:
                 _stop_chaos(chaos_stop.group(1))
@@ -1065,6 +1089,36 @@ def chat(
             # Progress tracking — report task/quiz/scenario completions to server
             for item_type, item_key in _parse_progress_markers(latest_response):
                 client.report_progress(phase, item_type, item_key)
+
+            # Auto-inject next chaos scenario when SCENARIO_DONE is detected
+            scenario_markers = [k for t, k in _parse_progress_markers(latest_response) if t == "scenario"]
+            if scenario_markers and phase == "chaos":
+                prev_scenario = _current_chaos_scenario(client)
+                if prev_scenario:
+                    _stop_chaos(prev_scenario)
+                next_scenario = _next_chaos_scenario(client)
+                if next_scenario:
+                    acted = True
+                    ok, detail = _inject_chaos(next_scenario)
+                    if ok:
+                        auto_msg = "[SYSTEM: Chaos scenario injected successfully. The learner does not know what was injected. Begin the incident.]"
+                    else:
+                        auto_msg = f"[SYSTEM: Chaos injection failed — {detail}. Inform the learner there's a setup issue.]"
+                    messages.append({"role": "user", "content": auto_msg})
+                    try:
+                        file_context = _refresh_file_context(static_context)
+                        latest_response = _render_response(
+                            client.chat_stream(messages, file_context, phase=phase, quiz_state=quiz_state),
+                            status="Incident starting...",
+                        )
+                    except Exception as e:
+                        console.print(f"\n[red]Error: {e}[/red]")
+                        messages.pop()
+                        _sync_session(messages, phase, quiz_state)
+                        break
+                    clean = _strip_markers(latest_response)
+                    messages.append({"role": "assistant", "content": clean})
+                    break
 
             # Quiz state tracking within the action loop
             prev_quiz_state = quiz_state
