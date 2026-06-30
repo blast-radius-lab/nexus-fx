@@ -31,15 +31,32 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
 
-      - name: Check secret and env
-        env:
-          SOME_API_KEY: ${{ secrets.SOME_API_KEY }}
-        run: |
-          echo "APP_ENV=$APP_ENV"
-          echo "LOG_LEVEL=$LOG_LEVEL"
-          echo "key length: ${#SOME_API_KEY}"
-          echo "key value: $SOME_API_KEY"
-
       - name: Run tests
         working-directory: services/api-gateway
         run: pytest
+
+  build-and-push:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push api-gateway
+        uses: docker/build-push-action@v6
+        with:
+          context: ./services/api-gateway
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/api-gateway:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/api-gateway:latest
