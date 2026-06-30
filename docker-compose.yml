@@ -24,6 +24,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import httpx,sys; sys.exit(0 if httpx.get('http://localhost:8001/health').status_code==200 else 1)\""]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
 
   engine:
     build: ./services/engine
@@ -36,7 +47,18 @@ services:
       postgres:
         condition: service_healthy
       price-service:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import httpx,sys; sys.exit(0 if httpx.get('http://localhost:8002/health').status_code==200 else 1)\""]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 384M
 
   api-gateway:
     build: ./services/api-gateway
@@ -50,9 +72,20 @@ services:
       postgres:
         condition: service_healthy
       price-service:
-        condition: service_started
+        condition: service_healthy
       engine:
-        condition: service_started
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import httpx,sys; sys.exit(0 if httpx.get('http://localhost:8000/health').status_code==200 else 1)\""]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
 
 volumes:
   postgres-data:
