@@ -101,6 +101,23 @@ services:
       - engine
       - price-service
 
+  tempo:
+    image: grafana/tempo:2.6.0
+    command:
+      - "-config.file=/etc/tempo/tempo.yml"
+    volumes:
+      - ./monitoring/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3200/ready || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
   grafana:
     image: grafana/grafana:11.2.0
     environment:
@@ -113,8 +130,10 @@ services:
       - "3000:3000"
     depends_on:
       - prometheus
+      - tempo
 
 volumes:
   postgres-data:
   prometheus-data:
   grafana-data:
+  tempo-data:
