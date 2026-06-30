@@ -1,0 +1,139 @@
+{
+  "uid": "nexus-red",
+  "title": "nexus-fx — RED Metrics",
+  "tags": ["red", "nexus-fx"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "row",
+      "title": "api-gateway",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "api-gateway — Request Rate (req/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"api-gateway\"}[5m]))",
+          "legendFormat": "rps"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "api-gateway — Error Rate (5xx %)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"api-gateway\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"api-gateway\"}[5m]))",
+          "legendFormat": "error ratio"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "api-gateway — p99 Latency (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"api-gateway\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "engine",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "engine — Request Rate (req/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"engine\"}[5m]))",
+          "legendFormat": "rps"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "engine — Error Rate (5xx %)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"engine\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"engine\"}[5m]))",
+          "legendFormat": "error ratio"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "engine — p99 Latency (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"engine\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "price-service",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "price-service — Request Rate (req/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 19 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"price-service\"}[5m]))",
+          "legendFormat": "rps"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "price-service — Error Rate (5xx %)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 19 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{job=\"price-service\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{job=\"price-service\"}[5m]))",
+          "legendFormat": "error ratio"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "price-service — p99 Latency (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 19 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"price-service\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    }
+  ]
+}
