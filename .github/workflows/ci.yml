@@ -1,9 +1,12 @@
-```yaml
 name: CI
 
 on:
   push:
   pull_request:
+
+env:
+  APP_ENV: ci
+  LOG_LEVEL: info
 
 jobs:
   test:
@@ -28,7 +31,15 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
 
+      - name: Check secret and env
+        env:
+          SOME_API_KEY: ${{ secrets.SOME_API_KEY }}
+        run: |
+          echo "APP_ENV=$APP_ENV"
+          echo "LOG_LEVEL=$LOG_LEVEL"
+          echo "key length: ${#SOME_API_KEY}"
+          echo "key value: $SOME_API_KEY"
+
       - name: Run tests
         working-directory: services/api-gateway
         run: pytest
-```
