@@ -331,6 +331,7 @@ def _strip_markers(response: str) -> str:
     text = re.sub(r'\n*<<<TASK_DONE[^>]*>>>\n*', '', text)
     text = re.sub(r'\n*<<<QUIZ_DONE[^>]*>>>\n*', '', text)
     text = re.sub(r'\n*<<<SCENARIO_DONE[^>]*>>>\n*', '', text)
+    text = re.sub(r'\n*<<<OFF_TOPIC[^>]*>>>\n*', '', text)
     text = re.sub(r'\[PROGRESS (?:task|quiz|scenario) \d+\]', '', text)
     text = re.sub(r'\[PHASE_COMPLETE\]', '', text)
     # Truncate at hallucinated user responses
@@ -735,6 +736,15 @@ def chat(
 
         # Process chaos injection from kickoff response (e.g., resuming mid-phase)
         chaos_scenario = _parse_chaos_injection(full_response)
+        if not chaos_scenario and phase == "chaos":
+            progress = client.get_progress()
+            scenarios_done = []
+            if progress:
+                for item in progress.get("items", []):
+                    if item["phase"] == "chaos" and item["item_type"] == "scenario":
+                        scenarios_done.append(item["item_key"])
+            if not scenarios_done:
+                chaos_scenario = "price_stopped"
         if chaos_scenario:
             ok, detail = _inject_chaos(chaos_scenario)
             if ok:
@@ -1013,6 +1023,15 @@ def chat(
 
             # Chaos injection (silent — learner never sees this)
             chaos_scenario = _parse_chaos_injection(latest_response)
+            if not chaos_scenario and phase == "chaos":
+                progress = client.get_progress()
+                scenarios_done = []
+                if progress:
+                    for item in progress.get("items", []):
+                        if item["phase"] == "chaos" and item["item_type"] == "scenario":
+                            scenarios_done.append(item["item_key"])
+                if not scenarios_done:
+                    chaos_scenario = "price_stopped"
             if chaos_scenario:
                 acted = True
                 ok, detail = _inject_chaos(chaos_scenario)
@@ -1034,7 +1053,7 @@ def chat(
                     break
                 clean = _strip_markers(latest_response)
                 messages.append({"role": "assistant", "content": clean})
-                continue
+                break
 
             # Chaos stop — just stop the scenario silently, no follow-up API call.
             # The mentor's debrief question is already in this response; the learner

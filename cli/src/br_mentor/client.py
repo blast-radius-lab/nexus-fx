@@ -71,8 +71,8 @@ class MentorClient:
             if response.status_code == 429:
                 body = json.loads(response.read().decode())
                 raise SystemExit(
-                    f"\n\033[1;33mToken budget reached for this phase.\033[0m\n"
-                    f"{body.get('message', 'Try again later.')}\n"
+                    f"\n\033[1;33mSafety limit reached for this phase.\033[0m\n"
+                    f"{body.get('message', 'Your progress is saved. Please try again later.')}\n"
                 )
             if response.status_code != 200:
                 raise RuntimeError(
