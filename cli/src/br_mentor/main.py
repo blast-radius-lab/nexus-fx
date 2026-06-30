@@ -1120,6 +1120,47 @@ def chat(
                     messages.append({"role": "assistant", "content": clean})
                     break
 
+            # Chaos scenario stall detection — nudge model to close out
+            if phase == "chaos" and not scenario_markers and not acted:
+                injection_idx = None
+                for i, m in enumerate(messages):
+                    if m["role"] == "user" and "[SYSTEM: Chaos scenario injected" in m.get("content", ""):
+                        injection_idx = i
+                if injection_idx is not None:
+                    exchanges_since = (len(messages) - injection_idx) // 2
+                    already_nudged = any(
+                        "[SYSTEM: Scenario pacing" in m.get("content", "")
+                        for m in messages[injection_idx:]
+                        if m["role"] == "user"
+                    )
+                    if exchanges_since >= 12 and not already_nudged:
+                        acted = True
+                        nudge = (
+                            "[SYSTEM: Scenario pacing — this scenario has run for "
+                            f"{exchanges_since} exchanges. If the learner has "
+                            "demonstrated the core triage skill (identified the "
+                            "failure mode, confirmed with evidence, and articulated "
+                            "how to fix or escalate), close the debrief and emit "
+                            "SCENARIO_DONE. If they missed something critical, give "
+                            "them the answer, note the gap, and emit SCENARIO_DONE. "
+                            "Do not continue past this point.]"
+                        )
+                        messages.append({"role": "user", "content": nudge})
+                        try:
+                            file_context = _refresh_file_context(static_context)
+                            latest_response = _render_response(
+                                client.chat_stream(messages, file_context, phase=phase, quiz_state=quiz_state),
+                                status="Wrapping up scenario...",
+                            )
+                        except Exception as e:
+                            console.print(f"\n[red]Error: {e}[/red]")
+                            messages.pop()
+                            _sync_session(messages, phase, quiz_state)
+                            break
+                        clean = _strip_markers(latest_response)
+                        messages.append({"role": "assistant", "content": clean})
+                        continue
+
             # Quiz state tracking within the action loop
             prev_quiz_state = quiz_state
             quiz_state = _detect_quiz_state(latest_response, quiz_state)
