@@ -30,6 +30,12 @@ services:
       timeout: 3s
       retries: 3
       start_period: 15s
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://localhost:3100/loki/api/v1/push"
+        loki-retries: "5"
+        loki-batch-size: "400"
     deploy:
       resources:
         limits:
@@ -54,6 +60,12 @@ services:
       timeout: 3s
       retries: 3
       start_period: 15s
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://localhost:3100/loki/api/v1/push"
+        loki-retries: "5"
+        loki-batch-size: "400"
     deploy:
       resources:
         limits:
@@ -81,6 +93,12 @@ services:
       timeout: 3s
       retries: 3
       start_period: 15s
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://localhost:3100/loki/api/v1/push"
+        loki-retries: "5"
+        loki-batch-size: "400"
     deploy:
       resources:
         limits:
@@ -100,6 +118,22 @@ services:
       - api-gateway
       - engine
       - price-service
+
+  loki:
+    image: grafana/loki:3.2.0
+    command:
+      - "-config.file=/etc/loki/loki.yml"
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
 
   tempo:
     image: grafana/tempo:2.6.0
@@ -131,9 +165,11 @@ services:
     depends_on:
       - prometheus
       - tempo
+      - loki
 
 volumes:
   postgres-data:
   prometheus-data:
   grafana-data:
   tempo-data:
+  loki-data:
