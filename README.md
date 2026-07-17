@@ -263,7 +263,13 @@ pip install -e cli/
 
 ### 3. Set up your local environment
 
-Complete the [Local Environment Setup](#local-environment-setup) below — all three services must be running and healthy before you start the program.
+Run the setup script — it installs prerequisites, creates the database, configures `.env`, and installs dependencies:
+
+```bash
+./scripts/setup.sh
+```
+
+Or follow the [manual steps](#local-environment-setup) below. Either way, all three services must be running and healthy before you start the program.
 
 ### 4. Start a session
 
