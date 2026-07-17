@@ -253,15 +253,19 @@ Indexed on: `user_id`, `status`, `instrument` (client_orders); `client_order_id`
 
 Create your account at [Blast Radius Lab](https://blastradiuslab.com/signup)
 
-### 2. Clone and install
+### 2. Clone and install the CLI
 
 ```bash
-git clone https://github.com/blast-radius-lab/nexus-fx.git
+git clone https://github.com/YOUR-USERNAME/nexus-fx.git
 cd nexus-fx
 pip install -e cli/
 ```
 
-### 3. Start a session
+### 3. Set up your local environment
+
+Complete the [Local Environment Setup](#local-environment-setup) below — all three services must be running and healthy before you start the program.
+
+### 4. Start a session
 
 ```bash
 br-mentor chat
@@ -269,23 +273,165 @@ br-mentor chat
 
 You'll be prompted to log in with the credentials from signup. After that, your AI mentor will guide you through the curriculum — starting with containerization and working through CI, observability, SLOs, deployment, and incident response.
 
-## Running the Services Locally
+## Local Environment Setup
 
-Requires Python 3.13+ and a running PostgreSQL instance (see `.env.example` for connection defaults).
+Get all three services running on your machine before starting `br-mentor chat`. Follow every step — once all three health checks pass, you're ready.
+
+### Prerequisites
+
+- **Python 3.13+**
+- **PostgreSQL 16**
+- **Git** (you have this if you cloned the repo)
+
+### Step 1 — Python 3.13+
+
+Check your version:
 
 ```bash
-# Install dependencies (from each service directory)
-pip install -r services/api-gateway/requirements.txt
-pip install -r services/price-service/requirements.txt
-pip install -r services/engine/requirements.txt
-
-# Start each service (in separate terminals)
-cd services/price-service && uvicorn app.main:app --port 8001
-cd services/engine && uvicorn app.main:app --port 8002
-cd services/api-gateway && uvicorn app.main:app --port 8000
+python3 --version
 ```
 
-Services:
-- API Gateway: http://localhost:8000
-- Price Service: http://localhost:8001
-- Engine: http://localhost:8002
+If it's below 3.13, install with [pyenv](https://github.com/pyenv/pyenv) (recommended) or Homebrew:
+
+```bash
+# pyenv (recommended)
+brew install pyenv
+pyenv install 3.13.7
+pyenv global 3.13.7
+
+# OR Homebrew
+brew install python@3.13
+```
+
+### Step 2 — PostgreSQL
+
+```bash
+# Install
+brew install postgresql@16
+
+# Start the service
+brew services start postgresql@16
+
+# Verify
+pg_isready
+# Should show: /tmp:5432 - accepting connections
+```
+
+> **Note:** PostgreSQL needs to be running whenever you work on the project. If you restart your Mac, run `brew services start postgresql@16` again.
+
+### Step 3 — Configure environment
+
+Create the environment file from the template:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and update these three values for local development:
+
+```
+POSTGRES_HOST=localhost
+PRICE_SERVICE_URL=http://localhost:8001
+ENGINE_SERVICE_URL=http://localhost:8002
+```
+
+> **Don't skip this.** The defaults point to Docker container hostnames (`postgres`, `price-service`, `engine`) that won't resolve on your machine.
+
+### Step 4 — Database
+
+Create the database user and database:
+
+```bash
+# Create the user (enter 'nexus_dev' when prompted for password)
+createuser -P nexus
+
+# Create the database
+createdb -O nexus nexus
+```
+
+Run the init script to create tables and seed a demo user:
+
+```bash
+psql -U nexus -d nexus -f db/init.sql
+```
+
+Verify:
+
+```bash
+psql -U nexus -d nexus -c "\dt"
+# Should show: users, client_orders, lp_orders
+```
+
+### Step 5 — Python virtual environment
+
+```bash
+# Create and activate
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+> **Activate every time.** Run `source .venv/bin/activate` at the start of every session. If your prompt doesn't show `(.venv)`, your packages won't be found.
+
+Install dependencies for all three services:
+
+```bash
+pip install -r services/price-service/requirements.txt
+pip install -r services/engine/requirements.txt
+pip install -r services/api-gateway/requirements.txt
+```
+
+This may take a minute. Wait for `Successfully installed ...` on each one.
+
+### Step 6 — Start the services
+
+You need **three separate terminal windows**. In each one, activate the venv first (`source .venv/bin/activate`), then start one service.
+
+> **Start in this order.** Engine depends on price-service, and api-gateway depends on both.
+
+**Terminal 1 — price-service:**
+
+```bash
+cd services/price-service
+python -m uvicorn app.main:app --port 8001
+```
+
+**Terminal 2 — engine:**
+
+```bash
+cd services/engine
+python -m uvicorn app.main:app --port 8002
+```
+
+**Terminal 3 — api-gateway:**
+
+```bash
+cd services/api-gateway
+python -m uvicorn app.main:app --port 8000
+```
+
+### Step 7 — Verify
+
+Open a fourth terminal and run:
+
+```bash
+curl http://localhost:8001/health
+curl http://localhost:8002/health
+curl http://localhost:8000/health
+```
+
+Each should return `{"status":"ok","service":"..."}`.
+
+Then open http://localhost:8000 in your browser and log in with `demo` / `demo123`. If you see the trading dashboard, you're done.
+
+**All three healthy? Run `br-mentor chat` and start Phase A.**
+
+### Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `ModuleNotFoundError` | Venv not activated. Run `source .venv/bin/activate` and check `which python` points to `.venv/bin/python` |
+| `connection refused` / `could not connect to server` | PostgreSQL isn't running. `brew services start postgresql@16` |
+| `database "nexus" does not exist` | Run `createdb -O nexus nexus` then `psql -U nexus -d nexus -f db/init.sql` |
+| `role "nexus" does not exist` | Run `createuser -P nexus` (password: `nexus_dev`) |
+| `address already in use` | Another process on that port. `lsof -i :8001` then `kill <PID>` |
+| Stack trace too long to read | Pipe through tail: `python -m uvicorn app.main:app --port 8001 2>&1 \| tail -20` |
